@@ -89,6 +89,53 @@
   .overlay button:hover { background: var(--food); }
   .overlay button:focus-visible { outline: 2px solid var(--food); outline-offset: 3px; }
   .hint { text-align: center; color: var(--dim); font-size: 11px; letter-spacing: 0.12em; }
+  .badges {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 10px;
+    opacity: 0.45;
+  }
+  .badge.earned {
+    color: var(--snake);
+    border-color: var(--snake-dim);
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(61, 220, 90, 0.18);
+  }
+  .toast {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-8px);
+    background: var(--ground);
+    border: 1px solid var(--snake-dim);
+    color: var(--food);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 8px 18px;
+    box-shadow: 0 0 24px rgba(168, 255, 96, 0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s, transform 0.25s;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .toast { transition: none; }
+  }
 </style>
 
 <div class="game">
@@ -101,14 +148,16 @@
   </div>
   <div class="board-wrap">
     <canvas id="board"></canvas>
+    <div class="toast" id="toast"></div>
     <div class="overlay" id="overlay">
       <h1 id="ov-title">SNAKE</h1>
-      <p id="ov-msg">Arrow keys or WASD to steer.<br>Swipe on mobile. P pauses.</p>
+      <p id="ov-msg">Arrow keys or WASD to steer. Swipe on mobile. P pauses.<br>Walls wrap around — only biting yourself ends the game.</p>
       <p class="final hidden" id="ov-final"></p>
       <button id="ov-btn">Start</button>
     </div>
   </div>
-  <div class="hint">EAT · GROW · DON'T BITE YOURSELF</div>
+  <div class="hint">EAT · GROW · DON'T BITE YOURSELF · WALLS WRAP AROUND</div>
+  <div class="badges" id="badges"></div>
 </div>
 
 <script>
@@ -140,6 +189,49 @@
   best = Number(localStorage.getItem('snake-best') || 0);
   bestEl.textContent = best;
 
+  const BADGES = [
+    {id: 'hatchling', name: 'Hatchling', icon: '🥚', at: 30},
+    {id: 'garden',    name: 'Garden Snake', icon: '🐍', at: 80},
+    {id: 'viper',     name: 'Viper', icon: '⚡', at: 150},
+    {id: 'cobra',     name: 'King Cobra', icon: '👑', at: 250},
+    {id: 'anaconda',  name: 'Anaconda', icon: '🏆', at: 400},
+  ];
+  const badgesEl = document.getElementById('badges');
+  const toastEl = document.getElementById('toast');
+  let earned = new Set(JSON.parse(localStorage.getItem('snake-badges') || '[]'));
+  let toastTimer;
+
+  function renderBadges() {
+    badgesEl.innerHTML = '';
+    BADGES.forEach(b => {
+      const el = document.createElement('span');
+      el.className = 'badge' + (earned.has(b.id) ? ' earned' : '');
+      el.title = 'Reach ' + b.at + ' points';
+      el.textContent = b.icon + ' ' + b.name + ' · ' + b.at;
+      badgesEl.appendChild(el);
+    });
+  }
+
+  function checkBadges() {
+    BADGES.forEach(b => {
+      if (score >= b.at && !earned.has(b.id)) {
+        earned.add(b.id);
+        localStorage.setItem('snake-badges', JSON.stringify([...earned]));
+        renderBadges();
+        toastEl.textContent = b.icon + ' ' + b.name + ' unlocked';
+        toastEl.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+      }
+    });
+  }
+
+  function rankFor(points) {
+    let r = null;
+    BADGES.forEach(b => { if (points >= b.at) r = b; });
+    return r;
+  }
+
   function reset() {
     const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
     snake = [{x: cx - 1, y: cy}, {x: cx - 2, y: cy}, {x: cx - 3, y: cy}];
@@ -161,15 +253,18 @@
 
   function step() {
     dir = nextDir;
-    const head = {x: snake[0].x + dir.x, y: snake[0].y + dir.y};
-    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
-        snake.some(s => s.x === head.x && s.y === head.y)) {
+    const head = {
+      x: (snake[0].x + dir.x + COLS) % COLS,
+      y: (snake[0].y + dir.y + ROWS) % ROWS
+    };
+    if (snake.some(s => s.x === head.x && s.y === head.y)) {
       return gameOver();
     }
     snake.unshift(head);
     if (head.x === food.x && head.y === food.y) {
       score += 10;
       scoreEl.textContent = score;
+      checkBadges();
       speed = Math.max(65, speed - 3);
       placeFood();
       restartTimer();
@@ -235,7 +330,10 @@
     ovTitle.textContent = 'GAME OVER';
     ovMsg.classList.add('hidden');
     ovFinal.classList.remove('hidden');
-    ovFinal.textContent = 'SCORE ' + score + (score === best && score > 0 ? ' · NEW BEST' : '');
+    const rank = rankFor(score);
+    ovFinal.textContent = 'SCORE ' + score +
+      (rank ? ' · ' + rank.icon + ' ' + rank.name.toUpperCase() : '') +
+      (score === best && score > 0 ? ' · NEW BEST' : '');
     ovBtn.textContent = 'Play again';
     overlay.classList.remove('hidden');
   }
@@ -294,5 +392,6 @@
 
   sizeBoard();
   reset();
+  renderBadges();
   draw();
 </script>
